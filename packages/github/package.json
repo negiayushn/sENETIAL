@@ -1,0 +1,22 @@
+{
+  "name": "@sentinel/github",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GitHub App integration: installation tokens, install flow, lockfile fetching. No long-lived tokens are ever stored.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@octokit/auth-app": "^8.1.0",
+    "@octokit/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

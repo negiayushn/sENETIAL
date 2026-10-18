@@ -1,0 +1,26 @@
+{
+  "name": "sentinel",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "db:generate": "pnpm --filter @sentinel/db generate",
+    "db:migrate": "pnpm --filter @sentinel/db migrate:dev",
+    "db:deploy": "pnpm --filter @sentinel/db migrate:deploy",
+    "db:studio": "pnpm --filter @sentinel/db studio",
+    "dev:api": "pnpm --filter @sentinel/api dev",
+    "dev:web": "pnpm --filter @sentinel/web dev",
+    "dev": "pnpm build:packages && pnpm -r --parallel --filter @sentinel/api --filter @sentinel/web --filter @sentinel/worker dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "dev:worker": "pnpm --filter @sentinel/worker dev",
+    "test": "pnpm -r test",
+    "build:packages": "pnpm db:generate && pnpm --filter @sentinel/db --filter @sentinel/core --filter @sentinel/github build",
+    "setup": "pnpm install && pnpm build:packages && pnpm db:deploy"
+  }
+}

@@ -1,0 +1,330 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────── Better Auth core tables ─────────────
+// Field names follow Better Auth's default schema so the Prisma adapter works unmodified.
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions Session[]
+  accounts Account[]
+  targets  Target[]
+  scans    Scan[]
+
+  githubInstallations GithubInstallation[]
+  repositories        Repository[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ───────────── Sentinel domain (Phase 1 skeleton; extended in Phase 2+) ─────────────
+
+enum TargetStatus {
+  PENDING
+  VERIFIED
+}
+
+enum ScanStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum FindingSource {
+  WEB
+  DEPENDENCY
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum Confidence {
+  CONFIRMED
+  POTENTIAL
+}
+
+enum FindingStatus {
+  OPEN
+  ACKNOWLEDGED
+  FIXED
+  IGNORED
+  REOPENED
+}
+
+model Target {
+  id          String       @id @default(cuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  hostname    String
+  verifyToken String
+  status      TargetStatus @default(PENDING)
+  verifiedAt  DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  findings Finding[]
+  scans    Scan[]
+
+  @@unique([userId, hostname])
+  @@index([userId])
+}
+
+model Finding {
+  id          String        @id @default(cuid())
+  userId      String
+  targetId    String?
+  target      Target?       @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  source      FindingSource
+  type        String
+  title       String
+  severity    Severity
+  confidence  Confidence    @default(POTENTIAL)
+  status      FindingStatus @default(OPEN)
+  // sha256(source + owner + type + stable key) — upsert key that deduplicates findings
+  fingerprint String        @unique
+  evidence    Json?
+  remediation String?
+  firstSeenAt DateTime      @default(now())
+  lastSeenAt  DateTime      @default(now())
+  // the scan that most recently observed this finding (Phase 3+ uses it to detect "no longer seen")
+  lastScanId  String?
+  lastScan    Scan?         @relation(fields: [lastScanId], references: [id], onDelete: SetNull)
+  // dependency findings belong to a repository (website findings belong to a target)
+  repositoryId String?
+  repository   Repository?  @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([targetId])
+  @@index([repositoryId])
+}
+
+model Scan {
+  id         String     @id @default(cuid())
+  userId     String
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetId   String
+  target     Target     @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  status     ScanStatus @default(QUEUED)
+  // short, user-safe failure reason (never a stack trace)
+  error      String?
+  // per-check outcomes, request count, finding counts
+  summary    Json?
+  createdAt  DateTime   @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  findings Finding[]
+
+  @@index([targetId, createdAt])
+  @@index([userId])
+}
+
+// ───────────── Phase 3: GitHub integration & dependency inventory ─────────────
+// No GitHub tokens are stored anywhere. Only the installation id; short-lived tokens are minted on demand.
+
+enum MatchStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+enum InventoryStatus {
+  NONE
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  // repo is fine but has no supported lockfile (see inventoryError for why)
+  NO_LOCKFILE
+  FAILED
+}
+
+model GithubInstallation {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // GitHub's numeric installation id, kept as text (ids can outgrow 32-bit ints and JSON-safe numbers)
+  installationId      String
+  accountLogin        String
+  accountType         String
+  repositorySelection String
+  suspendedAt         DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  repositories Repository[]
+
+  @@unique([userId, installationId])
+  @@index([userId])
+}
+
+model Repository {
+  id             String             @id @default(cuid())
+  userId         String
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  installationId String
+  installation   GithubInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  githubRepoId   String
+  owner          String
+  name           String
+  fullName       String
+  defaultBranch  String
+  private        Boolean            @default(false)
+  archived       Boolean            @default(false)
+
+  inventoryStatus  InventoryStatus @default(NONE)
+  // user-safe note: failure reason, or why there is no lockfile
+  inventoryError   String?
+  lastInventorySha String?
+  lastInventoryAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  snapshots DependencySnapshot[]
+  findings  Finding[]
+
+  @@unique([installationId, githubRepoId])
+  @@index([userId])
+}
+
+// One row per (repository, commit, lockfile). Re-running the inventory for the same commit is a no-op.
+model DependencySnapshot {
+  id              String     @id @default(cuid())
+  repositoryId    String
+  repository      Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  commitSha       String
+  branch          String
+  lockfilePath    String
+  lockfileVersion Int
+  packageCount    Int
+  directCount     Int
+  createdAt       DateTime   @default(now())
+
+  // Phase 4: vulnerability matching of this snapshot
+  matchStatus  MatchStatus @default(PENDING)
+  matchedAt    DateTime?
+  // user-safe failure reason
+  matchError   String?
+  // counts: packages queried, advisories, findings by severity, matcher disagreements …
+  matchSummary Json?
+
+  instances PackageInstance[]
+
+  @@unique([repositoryId, commitSha, lockfilePath])
+  @@index([repositoryId, createdAt])
+}
+
+model PackageInstance {
+  id         String             @id @default(cuid())
+  snapshotId String
+  snapshot   DependencySnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  name       String
+  version    String
+  // node_modules/foo/node_modules/bar
+  path       String
+  dev        Boolean            @default(false)
+  optional   Boolean            @default(false)
+  direct     Boolean            @default(false)
+  // registry | git | file | other  (only "registry" packages are matched against advisories)
+  source     String             @default("registry")
+  // declared dependency names; lets later phases reconstruct the path to the direct parent
+  requires   String[]
+
+  @@index([snapshotId])
+  @@index([name])
+}
+
+// ───────────── Phase 4: OSV advisories (cache now, local mirror in Phase 5) ─────────────
+model Advisory {
+  // the OSV id, e.g. GHSA-35jh-r3h4-6jhm
+  id             String    @id
+  // OSV's own "modified" timestamp: a cached row is stale when OSV reports a newer one
+  modified       DateTime
+  published      DateTime?
+  withdrawn      DateTime?
+  summary        String?
+  details        String?
+  aliases        String[]
+  // mapped to our scale from the CVSS v3 score or the advisory's own label; null if the record gives neither
+  severity       Severity?
+  // 'cvss' | 'database'
+  severitySource String?
+  cvssScore      Float?
+  cvssVector     String?
+  // normalised npm `affected` entries: [{ name, ranges: [{ type, events }], versions }]
+  affected       Json
+  packageNames   String[]
+  references     Json?
+  fetchedAt      DateTime  @default(now())
+
+  @@index([packageNames], type: Gin)
+  @@index([modified])
+}
